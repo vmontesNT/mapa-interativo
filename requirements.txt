@@ -1,3 +1,8 @@
-streamlit
-folium
-streamlit-folium
+streamlit==1.32.2
+folium==0.14.0
+streamlit-folium==0.15.1
+shapely==2.0.2
+geojson==3.0.1
+requests==2.31.0
+numpy==1.26.4
+pandas==2.2.1
