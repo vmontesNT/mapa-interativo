@@ -8,157 +8,138 @@ import tempfile
 from folium.plugins import LocateControl
 import zipfile
 
-# Configurações
+# ========== CONFIGURAÇÕES INICIAIS ==========
 st.set_page_config(page_title="Áreas de Atuação", layout="wide")
 st.title("📍 Monitoramento de Áreas de Atuação")
 
-# Caminho do arquivo JSON (agora relativo e zipado)
-json_zip_path = os.path.join(os.path.dirname(__file__), "data", "areas_cobertura.geojson.zip")
-json_filename = "areas_cobertura.geojson"  # Nome do arquivo dentro do ZIP
+# 1. VALORES PADRÃO ATUALIZADOS PARA BELÉM/PA
+DEFAULT_LATITUDE = -20.828997  # Latitude de Belém
+DEFAULT_LONGITUDE = -49.423328  # Longitude de Belém
 
-# Inicializar variáveis de sessão para localização
+# ========== GERENCIAMENTO DE LOCALIZAÇÃO ==========
 if 'latitude' not in st.session_state:
-    st.session_state.latitude = -26.200259324  # Valor padrão
-    st.session_state.longitude = -52.6997003783  # Valor padrão
+    st.session_state.latitude = DEFAULT_LATITUDE
+    st.session_state.longitude = DEFAULT_LONGITUDE
 
-# Criar mapa inicial para captura de localização
-mapa_localizacao = folium.Map(
+# Mapa principal
+mapa = folium.Map(
     location=[st.session_state.latitude, st.session_state.longitude],
     zoom_start=12,
     tiles="cartodbpositron"
 )
 
-# Adicionar controle de localização
-LocateControl(
-    auto_start=True,
-    keepCurrentZoomLevel=True,
-    drawMarker=True,
-    locate_options={"enableHighAccuracy": True}
-).add_to(mapa_localizacao)
+# Controle de localização aprimorado
+lc = LocateControl(
+    auto_start=False,  # Agora requer interação do usuário
+    strings={"title": "Clique para usar minha localização"},
+    locate_options={"enableHighAccuracy": True, "timeout": 15}
+)
+lc.add_to(mapa)
 
-# Renderizar mapa para capturar localização
-map_data = st_folium(mapa_localizacao, width=1, height=1, returned_objects=["last_location"])
+# Botão para forçar atualização
+if st.button("🔍 Usar Minha Localização Atual"):
+    st.session_state.force_update = True
 
-# Atualizar localização se obtida
-if map_data and map_data.get("last_location"):
-    st.session_state.latitude = map_data["last_location"]["lat"]
-    st.session_state.longitude = map_data["last_location"]["lng"]
+# Renderização do mapa
+map_data = st_folium(
+    mapa,
+    width=700,
+    height=500,
+    returned_objects=["last_location"]
+)
 
-# Função para calcular distância entre coordenadas (Haversine)
+# Atualização de coordenadas
+if map_data.get("last_location"):
+    new_lat = map_data["last_location"]["lat"]
+    new_lng = map_data["last_location"]["lng"]
+    if (abs(new_lat - st.session_state.latitude) > 0.0001 or \
+       (abs(new_lng - st.session_state.longitude) > 0.0001):
+        st.session_state.latitude = new_lat
+        st.session_state.longitude = new_lng
+        st.rerun()
+
+# ========== FUNÇÕES DO GEOJSON ==========
+def carregar_dados_json():
+    json_zip_path = os.path.join("data", "areas_cobertura.geojson.zip")
+    try:
+        with zipfile.ZipFile(json_zip_path, 'r') as z:
+            with z.open("areas_cobertura.geojson") as f:
+                return json.load(f)
+    except Exception as e:
+        st.error(f"Erro ao carregar GeoJSON: {str(e)}")
+        return {"features": []}
+
 def calcular_distancia(lat1, lon1, lat2, lon2):
     R = 6371.0  # Raio da Terra em km
     lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
     dlon = lon2 - lon1
     dlat = lat2 - lat1
     a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-    c = 2 * atan2(sqrt(a), sqrt(1-a))
-    return R * c
+    return R * 2 * atan2(sqrt(a), sqrt(1-a))
 
-# Carregar dados do JSON ZIPADO
-def carregar_dados_json():
+# ========== PROCESSAMENTO DO MAPA ==========
+dados_json = carregar_dados_json()
+poligonos_filtrados = []
+
+for feature in dados_json.get("features", []):
     try:
-        with zipfile.ZipFile(json_zip_path, 'r') as z:
-            with z.open(json_filename) as f:
-                return json.load(f)
-    except Exception as e:
-        st.error(f"Erro ao carregar arquivo GeoJSON: {str(e)}")
-        return {"features": []}  # Retorna estrutura vazia em caso de erro
+        coords = feature.get("geometry", {}).get("coordinates", [[]])[0]
+        for coord in coords:
+            if len(coord) >= 2:
+                distancia = calcular_distancia(
+                    st.session_state.latitude, st.session_state.longitude,
+                    coord[1], coord[0]  # GeoJSON usa [lon, lat]
+                )
+                if distancia <= 20:
+                    poligonos_filtrados.append(feature)
+                    break
+    except Exception:
+        continue
 
-# Função para gerar o mapa (agora sempre retorna um mapa)
-def criar_mapa(poligonos_filtrados):
-    # Criar mapa base
+# ========== RENDERIZAÇÃO FINAL ==========
+def criar_mapa_completo():
     m = folium.Map(
-        location=[st.session_state.latitude, st.session_state.longitude], 
+        location=[st.session_state.latitude, st.session_state.longitude],
         zoom_start=12,
-        tiles="cartodbpositron",
-        control_scale=True
+        tiles="cartodbpositron"
     )
     
-    # Adicionar polígonos ao mapa (se existirem)
+    # Polígonos (se existirem)
     for feature in poligonos_filtrados:
-        try:
-            # Verifica se as coordenadas estão no formato correto
-            if "geometry" in feature:
-                coordinates = feature["geometry"]["coordinates"][0]  # Para Polygon
-            else:
-                coordinates = feature.get("coordinates", [])
-            
-            folium.Polygon(
-                locations=coordinates,
-                color="blue",
-                fill=True,
-                fill_color="blue",
-                fill_opacity=0.2,
-                weight=2,
-                tooltip=feature.get("name", "Área sem nome")
-            ).add_to(m)
-        except Exception as e:
-            st.warning(f"Erro ao plotar polígono: {str(e)}")
-            continue
+        folium.Polygon(
+            locations=feature["geometry"]["coordinates"][0],
+            color='blue',
+            fill=True,
+            tooltip=feature.get("properties", {}).get("name", "Área")
+        ).add_to(m)
     
-    # SEMPRE adicionar marcador do usuário
+    # Marcador do usuário
     folium.Marker(
-        location=[st.session_state.latitude, st.session_state.longitude],
-        popup="<b>Você está aqui</b>",
-        icon=folium.Icon(color="red", icon="user")
+        [st.session_state.latitude, st.session_state.longitude],
+        popup="Sua Localização",
+        icon=folium.Icon(color="red")
     ).add_to(m)
     
-    # SEMPRE adicionar círculo de 20km
+    # Círculo de 20km
     folium.Circle(
-        location=[st.session_state.latitude, st.session_state.longitude],
+        [st.session_state.latitude, st.session_state.longitude],
         radius=20000,
-        color="green",
+        color='green',
         fill=True,
-        fill_opacity=0.05,
-        tooltip="Raio de 20km"
+        fill_opacity=0.1
     ).add_to(m)
     
     return m
 
-# Função para salvar o mapa em um arquivo temporário HTML
-def salvar_mapa_como_html(mapa):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp_file:
-        mapa.save(tmp_file.name)
-        return tmp_file.name
+# Exibição do mapa
+mapa_final = criar_mapa_completo()
+mapa_html = tempfile.NamedTemporaryFile(delete=False, suffix=".html")
+mapa_final.save(mapa_html.name)
+st.components.v1.html(open(mapa_html.name, "r").read(), height=600)
+os.unlink(mapa_html.name)
 
-# Carregar dados do JSON
-dados_json = carregar_dados_json()
-
-# Filtrar polígonos dentro do raio de 20km
-poligonos_filtrados = []
-for feature in dados_json.get("features", []):
-    try:
-        # Obtém as coordenadas do polígono
-        if "geometry" in feature:
-            coordinates = feature["geometry"]["coordinates"][0]  # Para Polygon
-        else:
-            coordinates = feature.get("coordinates", [])
-        
-        # Verifica cada coordenada do polígono
-        for coord in coordinates:
-            if len(coord) >= 2:
-                lon, lat = coord[0], coord[1]
-                dist = calcular_distancia(st.session_state.latitude, st.session_state.longitude, lat, lon)
-                if dist <= 20:
-                    poligonos_filtrados.append(feature)
-                    break
-    except Exception as e:
-        continue
-
-# SEMPRE mostrar o mapa, mesmo sem polígonos
-mapa = criar_mapa(poligonos_filtrados)
-mapa_html_path = salvar_mapa_como_html(mapa)
-
-st.subheader("Mapa de Áreas de Atuação")
-st.components.v1.html(open(mapa_html_path, "r", encoding='utf-8').read(), 
-                     height=600, width=800)
-
-# Mensagem informativa se não houver polígonos
+# Feedback visual
 if not poligonos_filtrados:
-    st.info("""
-    Nenhuma área de atuação encontrada no raio de 20km da sua localização.
-    O mapa está mostrando apenas sua posição atual e o raio de cobertura.
-    """)
-
-# Remover arquivo temporário
-os.remove(mapa_html_path)
+    st.warning("Nenhuma área encontrada em 20km. Verifique sua localização.")
+else:
+    st.success(f"{len(poligonos_filtrados)} áreas encontradas próximas a você!")
