@@ -2,12 +2,9 @@ import streamlit as st
 import folium
 from streamlit_folium import st_folium
 import json
-from shapely.geometry import Point, Polygon
 from math import radians, sin, cos, sqrt, atan2
-import webbrowser
 import os
 import tempfile
-import shutil
 from folium.plugins import LocateControl
 import zipfile
 
@@ -67,7 +64,7 @@ def carregar_dados_json():
         st.error(f"Erro ao carregar arquivo GeoJSON: {str(e)}")
         return {"features": []}  # Retorna estrutura vazia em caso de erro
 
-# Função para gerar o mapa
+# Função para gerar o mapa (agora sempre retorna um mapa)
 def criar_mapa(poligonos_filtrados):
     # Criar mapa base
     m = folium.Map(
@@ -77,32 +74,36 @@ def criar_mapa(poligonos_filtrados):
         control_scale=True
     )
     
-    # Adicionar polígonos ao mapa
+    # Adicionar polígonos ao mapa (se existirem)
     for feature in poligonos_filtrados:
-        # Verifica se as coordenadas estão no formato correto
-        if "geometry" in feature:
-            coordinates = feature["geometry"]["coordinates"][0]  # Para Polygon
-        else:
-            coordinates = feature["coordinates"]  # Formato alternativo
-        
-        folium.Polygon(
-            locations=coordinates,
-            color="blue",
-            fill=True,
-            fill_color="blue",
-            fill_opacity=0.2,
-            weight=2,
-            tooltip=feature.get("name", "Área sem nome")
-        ).add_to(m)
+        try:
+            # Verifica se as coordenadas estão no formato correto
+            if "geometry" in feature:
+                coordinates = feature["geometry"]["coordinates"][0]  # Para Polygon
+            else:
+                coordinates = feature.get("coordinates", [])
+            
+            folium.Polygon(
+                locations=coordinates,
+                color="blue",
+                fill=True,
+                fill_color="blue",
+                fill_opacity=0.2,
+                weight=2,
+                tooltip=feature.get("name", "Área sem nome")
+            ).add_to(m)
+        except Exception as e:
+            st.warning(f"Erro ao plotar polígono: {str(e)}")
+            continue
     
-    # Adicionar marcador do vendedor
+    # SEMPRE adicionar marcador do usuário
     folium.Marker(
         location=[st.session_state.latitude, st.session_state.longitude],
         popup="<b>Você está aqui</b>",
         icon=folium.Icon(color="red", icon="user")
     ).add_to(m)
     
-    # Adicionar círculo de 20km
+    # SEMPRE adicionar círculo de 20km
     folium.Circle(
         location=[st.session_state.latitude, st.session_state.longitude],
         radius=20000,
@@ -135,7 +136,6 @@ for feature in dados_json.get("features", []):
         
         # Verifica cada coordenada do polígono
         for coord in coordinates:
-            # Alguns GeoJSON armazenam como [lon, lat], outros como [lat, lon]
             if len(coord) >= 2:
                 lon, lat = coord[0], coord[1]
                 dist = calcular_distancia(st.session_state.latitude, st.session_state.longitude, lat, lon)
@@ -143,21 +143,22 @@ for feature in dados_json.get("features", []):
                     poligonos_filtrados.append(feature)
                     break
     except Exception as e:
-        st.warning(f"Erro ao processar feature: {str(e)}")
         continue
 
-# Interface principal
-if poligonos_filtrados:
-    if st.button("Atualizar Mapa"):
-        mapa = criar_mapa(poligonos_filtrados)
-        mapa_html_path = salvar_mapa_como_html(mapa)
-        
-        st.subheader("Mapa de Áreas de Atuação")
-        st.components.v1.html(open(mapa_html_path, "r", encoding='utf-8').read(), 
-                             height=600, width=800)
-        
-        os.remove(mapa_html_path)
-    else:
-        st.write("Clique no botão para atualizar o mapa")
-else:
-    st.warning("Nenhuma área encontrada no raio de 20km. Verifique sua localização ou os dados do GeoJSON.")
+# SEMPRE mostrar o mapa, mesmo sem polígonos
+mapa = criar_mapa(poligonos_filtrados)
+mapa_html_path = salvar_mapa_como_html(mapa)
+
+st.subheader("Mapa de Áreas de Atuação")
+st.components.v1.html(open(mapa_html_path, "r", encoding='utf-8').read(), 
+                     height=600, width=800)
+
+# Mensagem informativa se não houver polígonos
+if not poligonos_filtrados:
+    st.info("""
+    Nenhuma área de atuação encontrada no raio de 20km da sua localização.
+    O mapa está mostrando apenas sua posição atual e o raio de cobertura.
+    """)
+
+# Remover arquivo temporário
+os.remove(mapa_html_path)
