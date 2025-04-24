@@ -2,136 +2,147 @@ import streamlit as st
 import folium
 from streamlit_folium import st_folium
 import json
-import os
-import tempfile
-from folium.plugins import LocateControl
 import zipfile
+import os
+from math import radians, cos, sin, sqrt, atan2
 
-# Configurações iniciais
+# Configuração da página
 st.set_page_config(page_title="Áreas de Atuação", layout="wide")
 st.title("📍 Monitoramento de Áreas de Atuação")
 
-# 1. LOCALIZAÇÃO - Valores padrão para um ponto conhecido em Belém
-DEFAULT_LOCATION = [-20.828997, -49.423328]  # Centro de Belém
+## 1. Configuração Inicial Única ##
+# Coordenadas padrão para Ponto com Polígonos Conhecidos
+DEFAULT_LOCATION = [-20.828997, -49.423328]
 
-# Inicialização da sessão
-if 'location' not in st.session_state:
-    st.session_state.location = DEFAULT_LOCATION
-    st.session_state.found_polygons = False
+# Inicialização do estado da sessão
+if 'map_center' not in st.session_state:
+    st.session_state.map_center = DEFAULT_LOCATION
+    st.session_state.user_location = None
+    st.session_state.polygons_loaded = False
 
-# 2. CARREGAMENTO DO GEOJSON - Versão mais robusta
+## 2. Carregamento do GeoJSON ##
 @st.cache_data
-def load_geojson():
+def load_geojson_data():
     try:
         with zipfile.ZipFile("data/areas_cobertura.geojson.zip") as z:
             with z.open("areas_cobertura.geojson") as f:
                 return json.load(f)
     except Exception as e:
-        st.error(f"Erro ao carregar GeoJSON: {str(e)}")
+        st.error(f"Erro ao carregar dados: {str(e)}")
         return {"type": "FeatureCollection", "features": []}
 
-# 3. MAPA PRINCIPAL - Única instância
-def create_main_map():
+## 3. Cálculo de Distância (Haversine) ##
+def calculate_distance(lat1, lon1, lat2, lon2):
+    R = 6371  # Raio da Terra em km
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+    a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
+    return R * 2 * atan2(sqrt(a), sqrt(1-a))
+
+## 4. Filtro de Polígonos ##
+def filter_polygons(geojson_data, center_point, radius_km=20):
+    filtered_features = []
+    for feature in geojson_data.get("features", []):
+        try:
+            # Verifica se o polígono está dentro do raio
+            polygon_coords = feature["geometry"]["coordinates"][0]
+            for coord in polygon_coords:
+                distance = calculate_distance(center_point[0], center_point[1], coord[1], coord[0])
+                if distance <= radius_km:
+                    filtered_features.append(feature)
+                    break
+        except (KeyError, TypeError):
+            continue
+    return filtered_features
+
+## 5. Criação do Mapa ##
+def create_map(center, polygons=[]):
     m = folium.Map(
-        location=st.session_state.location,
+        location=center,
         zoom_start=14,
         tiles="cartodbpositron",
         control_scale=True
     )
     
-    # Controle de localização
+    # Adiciona polígonos
+    for polygon in polygons:
+        folium.Polygon(
+            locations=polygon["geometry"]["coordinates"][0],
+            color='blue',
+            fill=True,
+            fill_opacity=0.4,
+            weight=2,
+            tooltip=polygon.get("properties", {}).get("name", "Área de Cobertura")
+        ).add_to(m)
+    
+    # Adiciona marcador do usuário
+    folium.Marker(
+        location=center,
+        popup="Sua Localização",
+        icon=folium.Icon(color="red", icon="user")
+    ).add_to(m)
+    
+    # Adiciona círculo de 20km
+    folium.Circle(
+        location=center,
+        radius=20000,
+        color='green',
+        fill=True,
+        fill_opacity=0.1,
+        tooltip="Raio de 20km"
+    ).add_to(m)
+    
+    # Adiciona controle de localização
     LocateControl(
         auto_start=False,
-        strings={"title": "Clique para usar minha localização"},
-        locate_options={"enableHighAccuracy": True, "timeout": 15}
+        strings={"title": "Usar minha localização"},
+        locate_options={"enableHighAccuracy": True}
     ).add_to(m)
     
     return m
 
-# 4. ATUALIZAÇÃO DE LOCALIZAÇÃO
-def update_location():
-    if st.session_state.get("new_location"):
-        st.session_state.location = st.session_state.new_location
-        st.session_state.found_polygons = False
-        st.rerun()
+## 6. Interface Principal ##
+# Carrega os dados
+geojson_data = load_geojson_data()
 
-# Interface principal
-main_map = create_main_map()
+# Cria e exibe o mapa principal
+main_map = create_map(st.session_state.map_center)
 
-# Renderização do mapa
+# Widget do mapa - APENAS UMA INSTÂNCIA
 map_data = st_folium(
     main_map,
-    key="main_map",
-    width=700,
-    height=500,
+    key="main_map_instance",
+    width=800,
+    height=600,
     returned_objects=["last_location"]
 )
 
-# Processamento da localização
+## 7. Atualização de Localização ##
 if map_data.get("last_location"):
-    new_loc = [map_data["last_location"]["lat"], map_data["last_location"]["lng"]
-    if new_loc != st.session_state.location:
-        st.session_state.new_location = new_loc
-        update_location()
+    new_location = [map_data["last_location"]["lat"], map_data["last_location"]["lng"]]
+    if new_location != st.session_state.map_center:
+        st.session_state.map_center = new_location
+        st.session_state.user_location = new_location
+        st.rerun()
 
-# 5. FILTRAGEM DE POLÍGONOS - Versão otimizada
-def filter_polygons(data, center, radius_km=20):
-    filtered = []
-    for feature in data.get("features", []):
-        try:
-            polygon = feature["geometry"]["coordinates"][0]
-            if any(is_point_near(center, point, radius_km) for point in polygon):
-                filtered.append(feature)
-        except (KeyError, TypeError):
-            continue
-    return filtered
+## 8. Filtragem e Atualização Dinâmica ##
+filtered_polygons = filter_polygons(geojson_data, st.session_state.map_center)
 
-def is_point_near(center, point, radius_km):
-    # Conversão simples para cálculo aproximado
-    lat_diff = abs(center[0] - point[1]) * 111  # 1 grau ≈ 111 km
-    lon_diff = abs(center[1] - point[0]) * 111 * cos(radians(center[0]))
-    return (lat_diff**2 + lon_diff**2)**0.5 <= radius_km
-
-# Carregamento e filtragem
-geojson_data = load_geojson()
-filtered_polygons = filter_polygons(geojson_data, st.session_state.location)
-
-# 6. ATUALIZAÇÃO DO MAPA - Adiciona elementos dinâmicos
+# Atualiza o mapa com os polígonos filtrados
 if filtered_polygons:
-    st.session_state.found_polygons = True
-    with st.spinner("Atualizando mapa..."):
-        for feature in filtered_polygons:
-            folium.Polygon(
-                locations=feature["geometry"]["coordinates"][0],
-                color='blue',
-                fill=True,
-                fill_opacity=0.4,
-                tooltip=feature.get("properties", {}).get("name", "Área de Cobertura")
-            ).add_to(main_map)
+    st.session_state.polygons_loaded = True
+    with st.spinner("Carregando áreas de cobertura..."):
+        main_map = create_map(st.session_state.map_center, filtered_polygons)
+        # Re-renderiza o mapa atualizado
+        st_folium(main_map, key="updated_map", width=800, height=600)
+        
+    st.success(f"{len(filtered_polygons)} áreas de cobertura encontradas!")
+else:
+    st.warning("Nenhuma área de cobertura encontrada neste local.")
+    st.write(f"Coordenadas atuais: {st.session_state.map_center}")
 
-# Elementos fixos do mapa
-folium.Marker(
-    st.session_state.location,
-    popup="Sua Localização",
-    icon=folium.Icon(color="red", icon="user")
-).add_to(main_map)
-
-folium.Circle(
-    st.session_state.location,
-    radius=20000,
-    color='green',
-    fill=True,
-    fill_opacity=0.1,
-    tooltip="Raio de 20km"
-).add_to(main_map)
-
-# Exibição final
-st_folium(main_map, width=700, height=500)
-
-# Feedback ao usuário
-if not st.session_state.found_polygons:
-    st.warning("""
-    Nenhuma área de cobertura encontrada neste local. 
-    Verifique se você está dentro da região de atendimento.
-    """)
-    st.write(f"Coordenadas atuais: {st.session_state.location}")
+# Botão para resetar para a localização padrão
+if st.button("↻ Resetar para Localização Padrão"):
+    st.session_state.map_center = DEFAULT_LOCATION
+    st.session_state.user_location = None
+    st.rerun()
