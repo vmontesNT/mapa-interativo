@@ -52,7 +52,7 @@ map_data = st_folium(
 if map_data.get("last_location"):
     new_lat = map_data["last_location"]["lat"]
     new_lng = map_data["last_location"]["lng"]
-    if (abs(new_lat - st.session_state.latitude) > 0.0001 or \
+    if (abs(new_lat - st.session_state.latitude) > 0.0001) or \
        (abs(new_lng - st.session_state.longitude) > 0.0001):
         st.session_state.latitude = new_lat
         st.session_state.longitude = new_lng
