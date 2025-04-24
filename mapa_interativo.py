@@ -12,7 +12,7 @@ st.set_page_config(page_title="Áreas de Atuação", layout="wide")
 st.title("📍 Monitoramento de Áreas de Atuação")
 
 # 1. LOCALIZAÇÃO - Valores padrão para um ponto conhecido em Belém
-DEFAULT_LOCATION = [-1.4557, -48.4902]  # Centro de Belém
+DEFAULT_LOCATION = [-20.828997, -49.423328]  # Centro de Belém
 
 # Inicialização da sessão
 if 'location' not in st.session_state:
