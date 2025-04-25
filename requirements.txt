@@ -6,3 +6,4 @@ geojson
 requests
 numpy
 pandas
+json
